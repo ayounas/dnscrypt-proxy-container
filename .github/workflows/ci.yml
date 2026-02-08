@@ -1,0 +1,138 @@
+name: Build and Publish
+
+on:
+  schedule:
+    - cron: '0 4 * * *' # Run daily at 4:00 UTC to check for updates
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: dnscrypt-proxy
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get latest upstream version
+        id: upstream
+        run: |
+          # Fetch latest release from GitHub API
+          LATEST_TAG=$(curl -s https://api.github.com/repos/DNSCrypt/dnscrypt-proxy/releases/latest | jq -r .tag_name)
+          if [ "$LATEST_TAG" == "null" ] || [ -z "$LATEST_TAG" ]; then
+            echo "Failed to fetch latest tag"
+            exit 1
+          fi
+          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Latest upstream tag: $LATEST_TAG"
+
+      - name: Check if build is needed
+        id: check
+        env:
+          TAG: ${{ steps.upstream.outputs.tag }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          # Convert owner to lowercase for docker registry check
+          OWNER_LC=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          IMAGE_URI="${{ env.REGISTRY }}/$OWNER_LC/${{ env.IMAGE_NAME }}:$TAG"
+          BASE_IMAGE="gcr.io/distroless/static-debian12"
+          
+          echo "Checking for image: $IMAGE_URI"
+          
+          # Get current base image digest (manifest digest)
+          # We use crane or simpler docker manifest inspect hacks if available.
+          # Or just pull it, the runner is fast enough.
+          
+          echo "Resolving base image digest..."
+          # Pull base image to get its unique digest
+          docker pull "$BASE_IMAGE" > /dev/null
+          # Get repo digest (e.g., sha256:...) from local pull
+          BASE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$BASE_IMAGE" | cut -d'@' -f2)
+          echo "Current Base Image Digest: $BASE_DIGEST"
+          echo "base_digest=$BASE_DIGEST" >> $GITHUB_OUTPUT
+          
+          IMAGE_EXISTS="false"
+          EXISTING_BASE_DIGEST=""
+          
+          if docker manifest inspect "$IMAGE_URI" > /dev/null 2>&1; then
+            echo "Image exists."
+            IMAGE_EXISTS="true"
+            
+            # Use skopeo to inspect remote config labels (usually available on ubuntu runners)
+            # If skopeo checks fail, we default to rebuild.
+            if command -v skopeo > /dev/null 2>&1; then
+               # Get config blob
+               CONFIG_JSON=$(skopeo inspect "docker://$IMAGE_URI")
+               EXISTING_BASE_DIGEST=$(echo "$CONFIG_JSON" | jq -r '.Labels["org.opencontainers.image.base.digest"] // empty')
+            else
+               # Fallback: pull image (safer)
+               docker pull "$IMAGE_URI" > /dev/null
+               EXISTING_BASE_DIGEST=$(docker inspect --format='{{ index .Config.Labels "org.opencontainers.image.base.digest" }}' "$IMAGE_URI")
+            fi
+            echo "Existing Image Built With Base Digest: $EXISTING_BASE_DIGEST"
+          else
+            echo "Image does not exist."
+          fi
+          
+          DO_BUILD="false"
+          REASON=""
+          
+          if [ "$IMAGE_EXISTS" == "false" ]; then
+            DO_BUILD="true"
+            REASON="New version detected"
+          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            DO_BUILD="true"
+            REASON="Manual trigger"
+          elif [ "$BASE_DIGEST" != "$EXISTING_BASE_DIGEST" ]; then
+             DO_BUILD="true"
+             REASON="Base image update detected ($EXISTING_BASE_DIGEST -> $BASE_DIGEST)"
+          fi
+          
+          echo "build=$DO_BUILD" >> $GITHUB_OUTPUT
+          echo "Build decision: $DO_BUILD ($REASON)"
+
+      - name: Set up QEMU
+        if: steps.check.outputs.build == 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: steps.check.outputs.build == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata (tags, labels) for Docker
+        if: steps.check.outputs.build == 'true'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ steps.upstream.outputs.tag }}
+
+      - name: Build and push Docker image
+        if: steps.check.outputs.build == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.base.name=gcr.io/distroless/static-debian12
+            org.opencontainers.image.base.digest=${{ steps.check.outputs.base_digest }}
+          build-args: |
+            DNSCRYPT_VERSION=${{ steps.upstream.outputs.tag }}
