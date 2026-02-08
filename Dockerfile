@@ -5,35 +5,27 @@ ARG DNSCRYPT_VERSION=latest
 
 WORKDIR /build
 
-# Install git for fetching source/config
+# Install git for fetching source
 RUN apk add --no-cache git
 
-# Install dnscrypt-proxy
-# If DNSCRYPT_VERSION is provided (e.g. v2.1.15), usage with @version, else @latest
-RUN if [ "$DNSCRYPT_VERSION" = "latest" ] || [ -z "$DNSCRYPT_VERSION" ]; then \
-        target="latest"; \
-    else \
-        target="$DNSCRYPT_VERSION"; \
+# Clone repo, checkout version, build dnscrypt-proxy and copy config
+RUN git clone https://github.com/DNSCrypt/dnscrypt-proxy.git /tmp/dnscrypt-proxy && \
+    cd /tmp/dnscrypt-proxy && \
+    if [ "$DNSCRYPT_VERSION" != "latest" ] && [ -n "$DNSCRYPT_VERSION" ]; then \
+        echo "Checking out version: $DNSCRYPT_VERSION"; \
+        (git checkout "$DNSCRYPT_VERSION" || git checkout "v$DNSCRYPT_VERSION" || echo "Version tag not found, using master"); \
     fi && \
-    echo "Building version: $target" && \
-    go install -v -trimpath -ldflags="-s -w" github.com/DNSCrypt/dnscrypt-proxy/dnscrypt-proxy@$target
+    # Build dnscrypt-proxy
+    cd dnscrypt-proxy && \
+    mkdir -p /go/bin && \
+    go build -v -trimpath -ldflags="-s -w" -o /go/bin/dnscrypt-proxy . && \
+    # Copy example config
+    cp example-dnscrypt-proxy.toml /build/dnscrypt-proxy.toml
 
 # Build static healthcheck binary
 COPY healthcheck.go .
 # CGO_ENABLED=0 is default for alpine go usually, but let's be explicit for static binary
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o healthcheck healthcheck.go
-
-# Fetch default config
-# We clone the repo to get the example config file corresponding to the version
-RUN git clone https://github.com/DNSCrypt/dnscrypt-proxy.git /tmp/dnscrypt-repo && \
-    if [ "$DNSCRYPT_VERSION" != "latest" ] && [ -n "$DNSCRYPT_VERSION" ]; then \
-        cd /tmp/dnscrypt-repo && \
-        # Try to checkout the tag, if it fails (maybe v prefix issue), try with v
-        (git checkout "$DNSCRYPT_VERSION" || \
-         git checkout "v$DNSCRYPT_VERSION" || \
-         echo "Could not checkout specific tag, using master"); \
-    fi && \
-    cp /tmp/dnscrypt-repo/dnscrypt-proxy/example-dnscrypt-proxy.toml /build/dnscrypt-proxy.toml
 
 # Configure dnscrypt-proxy.toml
 # 1. Listen on 0.0.0.0:5353 (Non-root port)
