@@ -4,10 +4,13 @@ A minimal, secure Docker container for [dnscrypt-proxy](https://github.com/DNSCr
 
 ## Features
 
-- **Base**: `gcr.io/distroless/static-debian12` (No shell, minimal attack surface).
+- **Base**: `gcr.io/distroless/static-debian13:nonroot` (Debian 13 "Trixie", No shell, minimal attack surface).
+- **Security**: 
+    - Runs as non-root user (uid: 65532).
+    - Base image verified with **Cosign** before build.
 - **Configuration**: Pre-configured to use **Cloudflare** as the upstream DoH provider.
 - **Healthcheck**: Built-in Go-based healthcheck that verifies DNS resolution via the proxy.
-- **Architecture**: Supports `linux/amd64` and `linux/arm64`.
+- **Architecture**: Supports `linux/amd64` and `linux/arm64` (including Raspberry Pi 5).
 - **Updates**: 
   - Checks for new upstream `dnscrypt-proxy` releases **daily**.
   - Checks for **distroless base image updates** daily and rebuilds immediately if a security update is found.
@@ -16,11 +19,13 @@ A minimal, secure Docker container for [dnscrypt-proxy](https://github.com/DNSCr
 
 ### Run with Docker
 
+The container runs on port **5353** internally to allow non-root execution. Map this to port 53 on your host.
+
 ```bash
 docker run -d \
   --name dnscrypt-proxy \
-  -p 53:53/udp \
-  -p 53:53/tcp \
+  -p 53:5353/udp \
+  -p 53:5353/tcp \
   ghcr.io/YOUR_USERNAME/dnscrypt-proxy-container:latest
 ```
 
@@ -37,11 +42,12 @@ To use your own `dnscrypt-proxy.toml`:
 ```bash
 docker run -d \
   --name dnscrypt-proxy \
-  -p 53:53/udp \
-  -p 53:53/tcp \
+  -p 53:5353/udp \
+  -p 53:5353/tcp \
   -v $(pwd)/dnscrypt-proxy.toml:/app/dnscrypt-proxy.toml \
   ghcr.io/YOUR_USERNAME/dnscrypt-proxy-container:latest
-```
+``` 
+
 
 ## GitHub Actions
 

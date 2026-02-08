@@ -29,28 +29,34 @@ RUN git clone https://github.com/DNSCrypt/dnscrypt-proxy.git /tmp/dnscrypt-repo 
     if [ "$DNSCRYPT_VERSION" != "latest" ] && [ -n "$DNSCRYPT_VERSION" ]; then \
         cd /tmp/dnscrypt-repo && \
         # Try to checkout the tag, if it fails (maybe v prefix issue), try with v
-        (git checkout "$DNSCRYPT_VERSION" || git checkout "v$DNSCRYPT_VERSION" || echo "Could not checkout specific tag, using master"); \
+        (git checkout "$DNSCRYPT_VERSION" || \
+         git checkout "v$DNSCRYPT_VERSION" || \
+         echo "Could not checkout specific tag, using master"); \
     fi && \
     cp /tmp/dnscrypt-repo/dnscrypt-proxy/example-dnscrypt-proxy.toml /build/dnscrypt-proxy.toml
 
 # Configure dnscrypt-proxy.toml
-# 1. Listen on 0.0.0.0:53
+# 1. Listen on 0.0.0.0:5353 (Non-root port)
 # 2. Use 'cloudflare' server
 # 3. Disable IPv6 output if needed (optional, but safer to keep unless requested) - keep default
 # 4. Ensure require_dnssec is true? user didn't ask, but good practice.
-RUN sed -i "s/^listen_addresses = .*/listen_addresses = ['0.0.0.0:53']/" /build/dnscrypt-proxy.toml && \
+RUN sed -i "s/^listen_addresses = .*/listen_addresses = ['0.0.0.0:5353']/" /build/dnscrypt-proxy.toml && \
     sed -i "s/^# server_names = .*/server_names = ['cloudflare']/" /build/dnscrypt-proxy.toml
 
-# Runtime stage
-FROM gcr.io/distroless/static-debian12
+# checkov:skip=CKV_DOCKER_7:Usage of latest tag is intended to fetch security updates for the base image automatically
+# Runtime stage - Using Debian 13 "Trixie" based distroless
+FROM gcr.io/distroless/static-debian13:nonroot
 
 WORKDIR /app
 
-COPY --from=builder /go/bin/dnscrypt-proxy /app/dnscrypt-proxy
-COPY --from=builder /build/healthcheck /app/healthcheck
-COPY --from=builder /build/dnscrypt-proxy.toml /app/dnscrypt-proxy.toml
+# Copy files with ownership for user 65532 (nonroot)
+COPY --from=builder --chown=65532:65532 /go/bin/dnscrypt-proxy /app/dnscrypt-proxy
+COPY --from=builder --chown=65532:65532 /build/healthcheck /app/healthcheck
+COPY --from=builder --chown=65532:65532 /build/dnscrypt-proxy.toml /app/dnscrypt-proxy.toml
 
-EXPOSE 53/tcp 53/udp
+USER nonroot
+
+EXPOSE 5353/tcp 5353/udp
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 CMD ["/app/healthcheck"]

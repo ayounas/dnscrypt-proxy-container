@@ -27,6 +27,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.5.0
+
       - name: Get latest upstream version
         id: upstream
         run: |
@@ -48,13 +51,18 @@ jobs:
           # Convert owner to lowercase for docker registry check
           OWNER_LC=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
           IMAGE_URI="${{ env.REGISTRY }}/$OWNER_LC/${{ env.IMAGE_NAME }}:$TAG"
-          BASE_IMAGE="gcr.io/distroless/static-debian12"
+          BASE_IMAGE="gcr.io/distroless/static-debian13:nonroot"
           
           echo "Checking for image: $IMAGE_URI"
           
           # Get current base image digest (manifest digest)
           # We use crane or simpler docker manifest inspect hacks if available.
           # Or just pull it, the runner is fast enough.
+          
+          echo "Verifying base image signature with Cosign..."
+          cosign verify "$BASE_IMAGE" \
+            --certificate-oidc-issuer https://accounts.google.com \
+            --certificate-identity keyless@distroless.iam.gserviceaccount.com
           
           echo "Resolving base image digest..."
           # Pull base image to get its unique digest
@@ -132,7 +140,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: |
             ${{ steps.meta.outputs.labels }}
-            org.opencontainers.image.base.name=gcr.io/distroless/static-debian12
+            org.opencontainers.image.base.name=gcr.io/distroless/static-debian13:nonroot
             org.opencontainers.image.base.digest=${{ steps.check.outputs.base_digest }}
           build-args: |
             DNSCRYPT_VERSION=${{ steps.upstream.outputs.tag }}

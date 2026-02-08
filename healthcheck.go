@@ -16,7 +16,7 @@ func main() {
 			d := net.Dialer{
 				Timeout: time.Millisecond * 500,
 			}
-			return d.DialContext(ctx, "udp", "127.0.0.1:53")
+			return d.DialContext(ctx, "udp", "127.0.0.1:5353")
 		},
 	}
 
